@@ -46,8 +46,9 @@ def load_custom_data(dataset_path, is_training=True, batch_size=cfg.batch_size):
 def get_batch_data():
     dataset = load_custom_data(cfg.dataset, is_training=True, batch_size=cfg.batch_size)
 
-    # Check the shape of a single batch
+    # Check the shape of a single batch and unpack the data
     for images, labels in dataset.take(1):
         print("Loaded data shapes:", images.shape, labels.shape)  # Should be (batch_size, 28, 28, 1) and (batch_size, 10)
     
-    return dataset
+    # Return images and labels separately
+    return images, labels
