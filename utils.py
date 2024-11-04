@@ -11,12 +11,8 @@ if __name__ == '__main__':
 
 
 def load_custom_data(dataset_path, is_training=True, batch_size=cfg.batch_size):
-
-    # Path to your compressed dataset
-    compressed_file_path = dataset_path
-
     # Load the compressed data
-    with gzip.open(compressed_file_path, 'rb') as f:
+    with gzip.open(dataset_path, 'rb') as f:
         data = pickle.load(f)
 
     # Assuming the data contains 'train_images', 'train_labels', 'test_images', 'test_labels'
@@ -24,6 +20,15 @@ def load_custom_data(dataset_path, is_training=True, batch_size=cfg.batch_size):
     train_labels = data['train_labels']
     test_images = data['test_images']
     test_labels = data['test_labels']
+
+    # Normalize the images to the range [0, 1]
+    train_images = train_images.astype('float32') / 255.0
+    test_images = test_images.astype('float32') / 255.0
+
+    # Reshape the images to [num_samples, height, width, channels]
+    # Assuming train_images has a shape of [52500, 28, 28] and needs to be reshaped to [52500, 28, 28, 1]
+    train_images = train_images.reshape(-1, 28, 28, 1)
+    test_images = test_images.reshape(-1, 28, 28, 1)
 
     # Create TensorFlow datasets
     train_dataset = tf.data.Dataset.from_tensor_slices((train_images, train_labels))
@@ -37,7 +42,7 @@ def load_custom_data(dataset_path, is_training=True, batch_size=cfg.batch_size):
         return train_dataset
     else:
         return test_dataset
-
+    
 def get_batch_data():
     dataset = load_custom_data(cfg.dataset, is_training=True, batch_size=cfg.batch_size)
 
