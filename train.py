@@ -4,51 +4,27 @@ from tqdm import tqdm
 from config import cfg
 from capsNet import CapsNet
 
-
 if __name__ == "__main__":
+    # Create an instance of the CapsNet model
     capsNet = CapsNet(is_training=cfg.is_training)
-    tf.logging.info('Graph loaded')
-    sv = tf.train.Supervisor(graph=capsNet.graph,
-                             logdir=cfg.logdir,
-                             save_model_secs=0)
-    
-    # Define the optimizer
-    optimizer = tf.keras.optimizers.Adam()
 
-    # Set up a checkpoint callback
-    checkpoint_path = cfg.logdir + "/model_epoch_{epoch:04d}.h5"
-    checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-        filepath=checkpoint_path,
-        save_weights_only=True,
-        save_freq='epoch',  # Save at the end of each epoch
-        verbose=1
-    )
-
+    # Define the number of batches
+    num_batch = int(52500 / cfg.batch_size)
     # Training loop
     for epoch in range(cfg.epoch):
-        total_loss = 0
-        num_batches = 0
+        # Use tqdm to show progress
+        for step in tqdm(range(num_batch), total=num_batch, ncols=70, leave=False, unit='b'):
 
-        # Iterate over the dataset
-        for images, labels in tqdm(capsNet.X, ncols=70, leave=False, unit='b'):
+            # Perform a training step
             with tf.GradientTape() as tape:
-                # Forward pass
-                predictions = capsNet(images, training=True)
-                # Calculate loss
-                loss = tf.keras.losses.categorical_crossentropy(labels, predictions)
-                total_loss += loss
-                num_batches += 1
+                class_output, decoded = capsNet(capsNet.X)  # Forward pass
+                loss_value = capsNet.train_loss(capsNet.Y, step)  # Calculate loss
 
-            # Calculate gradients and update weights
-            grads = tape.gradient(loss, capsNet.trainable_variables)
-            optimizer.apply_gradients(zip(grads, capsNet.trainable_variables))
+            # Compute gradients and update weights
+            gradients = tape.gradient(loss_value, capsNet.trainable_variables)
+            capsNet.optimizer.apply_gradients(zip(gradients, capsNet.trainable_variables))
 
-        # Average loss for the epoch
-        avg_loss = total_loss / num_batches
-        print(f'Epoch {epoch + 1} - Loss: {avg_loss.numpy()}')
+        # Optionally, save the model at the end of each epoch
+        capsNet.save(f"{cfg.logdir}/model_epoch_{epoch:04d}_step_{capsNet.global_step.numpy():02d}.keras")
 
-        # Save model weights using the checkpoint callback
-        checkpoint_callback.on_epoch_end(epoch)
-
-
-    tf.logging.info('Training done')
+    tf.get_logger().info('Training done')
