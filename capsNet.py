@@ -22,7 +22,7 @@ class CapsNet(tf.keras.Model):
             self.data = tf.data.Dataset.from_tensor_slices((self.X, self.Y)).batch(128)
             self.build_arch()
         else:
-            self.X = tf.keras.Input(tf.float32, shape=(cfg.batch_size, 28, 28, 1))  # Use Input layer for shape definition
+            # self.X = tf.keras.Input(tf.float32, shape=(cfg.batch_size, 28, 28, 1))  # Use Input layer for shape definition
             self.build_arch()
 
         print('Setting up the main structure')

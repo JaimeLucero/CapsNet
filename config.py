@@ -20,7 +20,7 @@ flags.DEFINE_float('learning_rate', 0.001, 'learning rate for optimizer')  # Add
 ############################
 #   environment setting    #
 ############################
-flags.DEFINE_string('dataset', 'data/ricedataset.pkl.gz', 'the path for dataset')
+flags.DEFINE_string('dataset', 'data/rice/', 'the path for dataset')
 flags.DEFINE_boolean('is_training', True, 'train or predict phase')
 flags.DEFINE_integer('num_threads', 8, 'number of threads of enqueueing exampls')
 flags.DEFINE_string('logdir', 'logdir', 'logs directory')

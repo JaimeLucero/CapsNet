@@ -9,7 +9,7 @@ if __name__ == "__main__":
     capsNet = CapsNet(is_training=cfg.is_training)
 
     # Define the number of batches
-    num_batch = int(52500 / cfg.batch_size)
+    num_batch = int(56250 / cfg.batch_size)
     # Training loop
     for epoch in range(cfg.epoch):
         # Use tqdm to show progress
@@ -25,6 +25,6 @@ if __name__ == "__main__":
             capsNet.optimizer.apply_gradients(zip(gradients, capsNet.trainable_variables))
 
         # Optionally, save the model at the end of each epoch
-        capsNet.save(f"{cfg.logdir}/model_epoch_{epoch:04d}_step_{capsNet.global_step.numpy():02d}.keras")
+        capsNet.save_weights(f"{cfg.logdir}/model_weights_epoch_{epoch:04d}_step_{capsNet.global_step.numpy():02d}.weights.h5")
 
     tf.get_logger().info('Training done')
