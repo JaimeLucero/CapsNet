@@ -55,17 +55,6 @@ class CapsNet(tf.keras.Model):
         class_output = tf.squeeze(self.softmax_v)  # Shape: (batch_size, num_classes)
 
         # Masking and reconstruction
-        # argmax_idx = tf.argmax(self.softmax_v, axis=1, output_type=tf.int32)
-        # argmax_idx = tf.reshape(argmax_idx, shape=(tf.shape(inputs)[0],))
-
-        # masked_v = []
-        # for batch_size in range(tf.shape(inputs)[0]):
-        #     v = x[batch_size][argmax_idx[batch_size], :]
-        #     masked_v.append(tf.reshape(v, shape=(1, 1, 16, 1)))
-
-        # self.masked_v = tf.concat(masked_v, axis=0)
-
-        # Masking and reconstruction
         argmax_idx = tf.argmax(self.softmax_v, axis=1, output_type=tf.int32)
         self.masked_v = tf.gather(x, argmax_idx, batch_dims=0)  # More efficient masking
 

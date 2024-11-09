@@ -1,101 +1,91 @@
 import tensorflow as tf
-import math
-
+from config import cfg
+from utils import get_batch_data
 from capsLayer import CapsConv
 from convCapsLayer import ConvCapsule
-from capsLayer import CapsConv
-
-layers = tf.keras.layers
-models = tf.keras.models
 
 class ConvCapsNet(tf.keras.Model):
-
-    def __init__(self, args):
+    def __init__(self, is_training=True):
         super(ConvCapsNet, self).__init__()
+        self.summary_writer = tf.summary.create_file_writer('imgs/')  # Change the path as needed
+        self.optimizer = tf.keras.optimizers.Adam()
+        self.global_step = tf.Variable(0, name='global_step', trainable=False)
+        
+        # Initialize empty layers; they will be built in `build()`
+        self.use_reconstruction = cfg.use_reconstruction
+        self.use_bias=cfg.use_bias
+        self.make_skips = cfg.make_skips
+        self.skip_dist = cfg.skip_dist
 
         # Set params
-        dimensions = list(map(int, args.dimensions.split(","))) if args.dimensions != "" else []
-        layers = list(map(int, args.layers.split(","))) if args.layers != "" else []
+        self.dimensions = list(map(int, cfg.dimensions)) if cfg.dimensions != "" else []
+        self.layersSize = list(map(int, cfg.layers)) if cfg.layers != "" else []
 
-        self.use_bias=args.use_bias
-        self.use_reconstruction = args.use_reconstruction
-        self.make_skips = args.make_skips
-        self.skip_dist = args.skip_dist
-
-        CapsuleType = {
-            "rba": CapsConv,
-        }
-
-        if args.dataset == 'mnist':
-            img_size = 24 
-        elif args.dataset == 'cifar10':
-            img_size = 32
+        if is_training:
+            # Get the batches of data as a TensorFlow Dataset
+            self.X, self.Y = get_batch_data()
+            self.data = tf.data.Dataset.from_tensor_slices((self.X, self.Y)).batch(128)
+            self.build_arch()
         else:
-            img_size = 28
-            # raise NotImplementedError()
+            self.build_arch()
 
-        conv1_filters, conv1_kernel, conv1_stride = 128, 7, 2
-        out_height = (img_size - conv1_kernel) // conv1_stride + 1
-        out_width = (img_size - conv1_kernel) // conv1_stride + 1 
+        print('Setting up the main structure')
 
-        with tf.name_scope(self.name):
+    def build_arch(self):
+        # Conv1 Layer
+        conv1_filters, conv1_kernel, conv1_stride = 128, 5, 1
+        out_height = (28 - conv1_kernel) // conv1_stride + 1
+        out_width = (28 - conv1_kernel) // conv1_stride + 1
 
-            # normal convolution
-            self.conv_1 = tf.keras.layers.Conv2D(
-                        conv1_filters, 
-                        kernel_size=conv1_kernel, 
-                        strides=conv1_stride, 
-                        padding='valid', 
-                        activation="relu", 
-                        name="conv1")
+        self.conv1 = tf.keras.layers.Conv2D(filters=conv1_filters, kernel_size=conv1_kernel,
+                                            strides=conv1_stride, padding='valid', activation='relu')
+        
+        self.capsuleShape = tf.keras.layers.Reshape(target_shape=(out_height, out_width, 1, conv1_filters))
 
-            # reshape into capsule shape
-            self.capsuleShape = tf.keras.layers.Reshape(target_shape=(out_height, out_width, 1, conv1_filters), name='toCapsuleShape')
 
-            self.capsule_layers = []
-            for i in range(len(layers)-1):
-                self.capsule_layers.append(
-                    ConvCapsule(
-                            name="ConvCapsuleLayer" + str(i), 
-                            in_capsules=layers[i], 
-                            in_dim=dimensions[i], 
-                            out_dim=dimensions[i], 
-                            out_capsules=layers[i+1], 
-                            kernel_size=3,
-                            routing_iterations=args.iterations,
-                            routing=args.routing))
+        self.capsule_layers = []
 
-            # flatten for input to FC capsule
-            self.flatten = tf.keras.layers.Reshape(target_shape=(out_height * out_width * layers[-2], dimensions[-2]), name='flatten')
+        for i, (capsules, dim) in enumerate(zip(self.layersSize[1:], self.dimensions[1:])):
+            self.capsule_layer = ConvCapsule(
+                name=f"ConvCapsuleLayer{i}",
+                in_capsules=self.layersSize[i],
+                in_dim=self.dimensions[i],
+                out_capsules=capsules,
+                out_dim=dim,
+                kernel_size=3,
+                routing_iterations=cfg.iterations,
+                routing=cfg.routing  # Pass routing as a keyword argument
+            )
+            self.capsule_layers.append(self.capsule_layer)
+
             
-            # fully connected caspule layer
-            self.fcCapsuleLayer = CapsConv(
-                        name="FCCapsuleLayer",
-                        in_capsules = out_height * out_width * layers[-2], 
-                        in_dim = dimensions[-2], 
-                        out_capsules = layers[-1],
-                        out_dim = dimensions[-1], 
-                        use_bias = self.use_bias)                      
+        # Flatten and Fully Connected Capsules
+        # Define the target shape directly
+        target_shape = (20, 20, 256)
+        # Initialize the reshape layer
+        self.flatten = tf.keras.layers.Reshape(target_shape=target_shape)
 
 
-            if self.use_reconstruction:
-                self.reconstruction_network = ReconstructionNetwork(
-                    name="ReconstructionNetwork",
-                    in_capsules=layers[-1], 
-                    in_dim=dimensions[-1],
-                    out_dim=args.img_height,
-                    img_dim=args.img_depth)
+        # Define Final Capsule Layers
+        self.fcCapsule = CapsConv(num_units=8, with_routing=False)
 
-            self.norm = Norm()
-            self.residual = Residual()
+        if self.use_reconstruction:
+            self.reconstruction_network = ReconstructionNetwork(
+                name="ReconstructionNetwork",
+                in_capsules=self.layersSize[-1], 
+                in_dim=self.dimensions[-1],
+                out_dim=28,
+                img_dim=3)
 
+        # Final classifier for class prediction
+        self.classifier = tf.keras.layers.Dense(units=5, activation='softmax')
 
-    # Inference
+        self.norm = Norm()
+        self.residual = Residual()
+
     def call(self, x, y):
-        x = self.conv_1(x)
+        x = self.conv1(x)
         x = self.capsuleShape(x)
-
-        print('x: ', x.shape)
 
         layers = []
         capsule_outputs = []    
@@ -116,13 +106,59 @@ class ConvCapsNet(tf.keras.Model):
             layers.append(x)
 
         x = self.flatten(x)
-        x = self.fcCapsuleLayer(x)
+        x = self.fcCapsule(x, num_outputs=5)
  
         r = self.reconstruction_network(x, y) if self.use_reconstruction else None
         out = self.norm(x)
 
         return out, r, layers
     
+    def train_loss(self, y_true, step):
+        # 1. The margin loss
+        # [batch_size, 10, 1, 1]
+        max_l = tf.square(tf.maximum(0., cfg.m_plus - self.v_length))
+        max_r = tf.square(tf.maximum(0., self.v_length - cfg.m_minus))
+
+        print("Shape of max_l:", max_l.shape)
+
+        
+        assert max_l.get_shape() == [cfg.batch_size, 5, 1, 1]
+
+        # Reshape: [batch_size, 10, 1, 1] => [batch_size, 10]
+        max_l = tf.reshape(max_l, shape=(cfg.batch_size, -1))
+        max_r = tf.reshape(max_r, shape=(cfg.batch_size, -1))
+
+        # Calculate T_c: [batch_size, 10]
+        # One-hot encode the true labels (ensure y_true is categorical)
+        T_c = tf.one_hot(tf.argmax(y_true, axis=1), depth=5)
+
+        # Calculate the margin loss
+        L_c = T_c * max_l + cfg.lambda_val * (1 - T_c) * max_r
+        self.margin_loss = tf.reduce_mean(tf.reduce_sum(L_c, axis=1))
+
+        # 2. The reconstruction loss
+        # Reshape input to compare
+        original = tf.reshape(self.X, shape=(cfg.batch_size, -1))  
+        squared = tf.square(self.decoded - original)
+        self.reconstruction_err = tf.reduce_mean(squared)
+
+        # 3. Total loss
+        self.total_loss = self.margin_loss + 0.0005 * self.reconstruction_err
+
+        # Summary
+        with self.summary_writer.as_default():
+            tf.summary.scalar('margin_loss', self.margin_loss, step=step)  # Replace with actual step
+            tf.summary.scalar('reconstruction_loss', self.reconstruction_err, step=step)
+            tf.summary.scalar('total_loss', self.total_loss, step=step)
+            recon_img = tf.reshape(self.decoded, shape=(cfg.batch_size, 28, 28, 1))
+            tf.summary.image('reconstruction_img', recon_img, step=step)
+
+        return self.total_loss
+    
+
+layers = tf.keras.layers
+models = tf.keras.models
+
 class ReconstructionNetwork(tf.keras.Model):
 
     def __init__(self, in_capsules, in_dim, name="", out_dim=28, img_dim=1):
@@ -136,16 +172,15 @@ class ReconstructionNetwork(tf.keras.Model):
         self.flatten = layers.Flatten()
         self.fc1 = layers.Dense(512, name="fc1", activation=tf.nn.relu)
         self.fc2 = layers.Dense(1024, name="fc2", activation=tf.nn.relu)
-        self.fc3 = layers.Dense(out_dim * out_dim * img_dim, name="fc3", activation=tf.sigmoid)
+        self.fc3 = layers.Dense(out_dim * out_dim * img_dim, name="fc3", activation=tf.nn.sigmoid)
 
-
-    def call(self, x, y):
-        x = self.flatten(x)
+    def call(self, inputs):
+        x = self.flatten(inputs)
         x = self.fc1(x)
         x = self.fc2(x)
-        x = self.fc3(x)
-        return x
-    
+        return self.fc3(x)  # Reconstruction output
+
+
 class Residual(tf.keras.Model):
     def call(self, out_prev, out_skip):
         x = tf.keras.layers.Add()([out_prev, out_skip])

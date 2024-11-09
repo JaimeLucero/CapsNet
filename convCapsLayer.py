@@ -22,7 +22,7 @@ class ConvCapsule(layers.Layer):
         self.out_dim = out_dim
         self.strides = stride
         self.padding = padding
-        self.iterations = routing_iterations
+        self.iterations = int(routing_iterations)
         self.routing = routing
         self.w_init = tf.random_normal_initializer(stddev=0.2)
         self.b_init = tf.constant_initializer(0.1)
@@ -59,15 +59,15 @@ class ConvCapsule(layers.Layer):
         input_tensor_reshaped.set_shape((None, self.input_height, self.input_width, self.in_caps_dim))
 
         conv = tf.nn.conv2d(input_tensor_reshaped, self.W, (self.strides, self.strides),
-                        padding=self.padding.upper(), data_format='NHWC')
+                            padding=self.padding.upper(), data_format='NHWC')
 
         votes_shape = conv.shape
         _, conv_height, conv_width, _ = conv.get_shape()
 
         votes = tf.reshape(conv, [input_shape[1], input_shape[0], votes_shape[1], votes_shape[2],
-                                 self.num_caps, self.caps_dim])
+                                self.num_caps, self.caps_dim])
         votes.set_shape((None, self.num_in_caps, conv_height, conv_width,
-                         self.num_caps, self.caps_dim))
+                        self.num_caps, self.caps_dim))
 
         logit_shape = tf.stack([input_shape[1], input_shape[0], votes_shape[1], votes_shape[2], self.num_caps])
         biases_replicated = tf.tile(self.b, [conv_height, conv_width, 1, 1])
