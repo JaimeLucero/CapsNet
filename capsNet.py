@@ -46,7 +46,9 @@ class CapsNet(tf.keras.Model):
     def call(self, inputs):
         # Forward pass through the layers
         x = self.conv1(inputs)  # Apply Conv1 layer
+        print('conv1 : ',x.shape)
         x = self.primaryCaps(x, num_outputs=32, kernel_size=9, stride=2)  # Pass required arguments
+        print('primary caps: ',x.shape)
         x = self.digitCaps(x, num_outputs=5)  # Pass required arguments
 
         # Classification output
@@ -57,7 +59,6 @@ class CapsNet(tf.keras.Model):
         # Masking and reconstruction
         argmax_idx = tf.argmax(self.softmax_v, axis=1, output_type=tf.int32)
         self.masked_v = tf.gather(x, argmax_idx, batch_dims=0)  # More efficient masking
-
 
         # Decoder forward pass
         vector_j = tf.reshape(self.masked_v, shape=(tf.shape(inputs)[0], -1))

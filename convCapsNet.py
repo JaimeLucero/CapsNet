@@ -33,7 +33,7 @@ class ConvCapsNet(tf.keras.Model):
 
     def build_arch(self):
         # Conv1 Layer
-        conv1_filters, conv1_kernel, conv1_stride = 128, 5, 1
+        conv1_filters, conv1_kernel, conv1_stride = 256, 9, 1
         out_height = (28 - conv1_kernel) // conv1_stride + 1
         out_width = (28 - conv1_kernel) // conv1_stride + 1
 
@@ -42,9 +42,7 @@ class ConvCapsNet(tf.keras.Model):
         
         self.capsuleShape = tf.keras.layers.Reshape(target_shape=(out_height, out_width, 1, conv1_filters))
 
-
         self.capsule_layers = []
-
         for i, (capsules, dim) in enumerate(zip(self.layersSize[1:], self.dimensions[1:])):
             self.capsule_layer = ConvCapsule(
                 name=f"ConvCapsuleLayer{i}",
@@ -57,17 +55,16 @@ class ConvCapsNet(tf.keras.Model):
                 routing=cfg.routing  # Pass routing as a keyword argument
             )
             self.capsule_layers.append(self.capsule_layer)
-
             
         # Flatten and Fully Connected Capsules
-        # Define the target shape directly
-        target_shape = (20, 20, 256)
         # Initialize the reshape layer
-        self.flatten = tf.keras.layers.Reshape(target_shape=target_shape)
+        self.flatten = tf.keras.layers.Reshape(target_shape=(20, 20, 256))
 
+        # Define the PrimaryCaps layer
+        self.primaryCaps = CapsConv(num_units=8, with_routing=False)
 
         # Define Final Capsule Layers
-        self.fcCapsule = CapsConv(num_units=8, with_routing=False)
+        self.fcCapsule = CapsConv(num_units=16, with_routing=True)
 
         if self.use_reconstruction:
             self.reconstruction_network = ReconstructionNetwork(
@@ -75,51 +72,70 @@ class ConvCapsNet(tf.keras.Model):
                 in_capsules=self.layersSize[-1], 
                 in_dim=self.dimensions[-1],
                 out_dim=28,
-                img_dim=3)
+                img_dim=1)
 
         # Final classifier for class prediction
         self.classifier = tf.keras.layers.Dense(units=5, activation='softmax')
 
-        self.norm = Norm()
         self.residual = Residual()
 
-    def call(self, x, y):
+    def call(self, x):
+        # Initial convolutional layer
         x = self.conv1(x)
         x = self.capsuleShape(x)
 
+        # Capsule layer forward pass with skip connections
         layers = []
         capsule_outputs = []    
         i = 0    
         for j, capsuleLayer in enumerate(self.capsule_layers):
             x = capsuleLayer(x)
             
-            # add skip connection
+            # Add skip connection
             capsule_outputs.append(x)
             if self.make_skips and i > 0 and i % self.skip_dist == 0:
                 out_skip = capsule_outputs[j-self.skip_dist]
                 if x.shape == out_skip.shape:
-                    #print('make residual connection from ', j-self.skip_dist, ' to ', j)
+                    # Make residual connection
                     x = self.residual(x, out_skip)
                     i = -1
             
             i += 1
             layers.append(x)
 
+        # Flatten the capsule outputs and pass through primary and final capsules
         x = self.flatten(x)
+        x = self.primaryCaps(x, num_outputs=32, kernel_size=9, stride=2)
         x = self.fcCapsule(x, num_outputs=5)
- 
-        r = self.reconstruction_network(x, y) if self.use_reconstruction else None
-        out = self.norm(x)
 
-        return out, r, layers
-    
+        # Calculate the v_length (vector length) for classification
+        self.v_length = tf.sqrt(tf.reduce_sum(tf.square(x), axis=2, keepdims=True))
+        self.softmax_v = tf.nn.softmax(self.v_length, axis=1)  # Softmax for classification
+
+        # Get the class output
+        class_output = tf.squeeze(self.softmax_v, axis=-1)  # Shape: (batch_size, num_classes)
+
+        # Masking: Use the softmax to select the corresponding capsule vectors
+        argmax_idx = tf.argmax(self.softmax_v, axis=1, output_type=tf.int32)
+        self.masked_v = tf.gather(x, argmax_idx, batch_dims=0)  # Efficient masking
+
+        # Decoder forward pass (Reconstruction network)
+        self.vector_j = tf.reshape(self.masked_v, shape=(tf.shape(x)[0], -1))  # Flatten the masked vector
+        fc1 = tf.keras.layers.Dense(units=512, activation='relu')(self.vector_j)
+        self.fc2 = tf.keras.layers.Dense(units=1024, activation='relu')(fc1)
+        self.decoded = tf.keras.layers.Dense(units=784, activation='sigmoid')(self.fc2)  # Assuming 28x28 image size for reconstruction
+
+        # Return both classification output and reconstruction output
+        r = self.reconstruction_network(x) if self.use_reconstruction else self.decoded
+
+        return class_output, r, layers
+
+        
     def train_loss(self, y_true, step):
         # 1. The margin loss
         # [batch_size, 10, 1, 1]
         max_l = tf.square(tf.maximum(0., cfg.m_plus - self.v_length))
         max_r = tf.square(tf.maximum(0., self.v_length - cfg.m_minus))
-
-        print("Shape of max_l:", max_l.shape)
 
         
         assert max_l.get_shape() == [cfg.batch_size, 5, 1, 1]
@@ -189,8 +205,3 @@ class Residual(tf.keras.Model):
 
     def count_params(self):
         return 0
-
-class Norm(tf.keras.Model):
-    def call(self, inputs):
-        x = tf.norm(inputs, name="norm", axis=-1)
-        return x

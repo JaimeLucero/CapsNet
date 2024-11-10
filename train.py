@@ -29,7 +29,7 @@ if __name__ == "__main__":
                     class_output, decoded = model(model.X)  # Forward pass
                     loss_value = model.train_loss(model.Y, step)  # Calculate loss
                 else:
-                    class_output, decoded, layer = model(model.X, model.Y)  # Forward pass
+                    class_output, decoded, layer = model(model.X)  # Forward pass
                     loss_value = model.train_loss(model.Y, step)  # Calculate loss
 
             # Compute gradients and update weights

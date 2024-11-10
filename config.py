@@ -18,7 +18,7 @@ flags.DEFINE_string('routing', 'rba', 'Routing algorithm (rba, em, sda)')
 flags.DEFINE_float('learning_rate', 0.001, 'learning rate for optimizer')  # Add this line
 flags.DEFINE_float('iterations', 2, 'number of iteration for convCaps')  # Add this line
 flags.DEFINE_list('dimensions', "8,8,16", 'Comma-separated list of layers. Each number represents the number of hidden units except for the first layer, the number of channels.')  # Add this line
-flags.DEFINE_list('layers', "32,32,10", 'Comma-separated list of layers. Each number represents the dimension of the layer.')  # Add this line
+flags.DEFINE_list('layers', "16,32,10", 'Comma-separated list of layers. Each number represents the dimension of the layer.')  # Add this line
 flags.DEFINE_boolean('use_reconstruction', True, 'Use the reconstruction network as regularization loss')
 flags.DEFINE_boolean('use_bias', True, 'Add a bias term to the preactivation')
 flags.DEFINE_boolean('make_skips', True, 'Add a skip connection between of same shape.')
