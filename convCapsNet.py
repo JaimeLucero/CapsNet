@@ -108,68 +108,100 @@ class ConvCapsNet(tf.keras.Model):
         x = self.primaryCaps(x, num_outputs=32, kernel_size=9, stride=2)
         x = self.fcCapsule(x, num_outputs=5)
 
-        # Calculate the v_length (vector length) for classification
-        self.v_length = tf.sqrt(tf.reduce_sum(tf.square(x), axis=2, keepdims=True))
-        self.softmax_v = tf.nn.softmax(self.v_length, axis=1)  # Softmax for classification
+        # Classification output
+        self.v_length = tf.sqrt(tf.reduce_sum(tf.square(x), axis=2, keepdims=True) + 1e-2)
+        self.softmax_v = tf.nn.softmax(self.v_length, axis=1)  # Softmax across the capsule dimension
+        assert self.softmax_v.shape == [cfg.batch_size, 5, 1, 1], f"Expected shape [cfg.batch_size, 5, 1, 1], but got {self.softmax_v.shape}"
+        
+        class_output = tf.squeeze(self.softmax_v, axis=[2, 3])  # Squeeze dimensions 2 and 3 (size 1), but keep the class dimension
+        assert class_output.shape == [cfg.batch_size, 5], f"Expected shape [cfg.batch_size, 5], but got {class_output.shape}"
 
-        # Get the class output
-        class_output = tf.squeeze(self.softmax_v, axis=-1)  # Shape: (batch_size, num_classes)
+        # Masking and reconstruction
+        argmax_idx = tf.argmax(self.softmax_v, axis=1, output_type=tf.int32)  # Get the predicted class index
+        assert argmax_idx.shape == [cfg.batch_size, 1, 1], f"Expected shape [cfg.batch_size, 1, 1], but got {argmax_idx.shape}"
+        
+        masked_v = []
+        argmax_idx = tf.reshape(argmax_idx, shape=(cfg.batch_size, ))
+        for batch_size in range(cfg.batch_size):
+            v = x[batch_size][argmax_idx[batch_size], :]  # Get the capsule corresponding to the predicted class
+            masked_v.append(tf.reshape(v, shape=(1, 1, 16, 1)))  # Reshape and append to list
 
-        # Masking: Use the softmax to select the corresponding capsule vectors
-        argmax_idx = tf.argmax(self.softmax_v, axis=1, output_type=tf.int32)
-        self.masked_v = tf.gather(x, argmax_idx, batch_dims=0)  # Efficient masking
+        self.masked_v = tf.concat(masked_v, axis=0)  # Concatenate masked vectors across the batch
+        assert self.masked_v.shape == [cfg.batch_size, 1, 16, 1], f"Expected shape [cfg.batch_size, 1, 16, 1], but got {self.masked_v.shape}"
 
-        # Decoder forward pass (Reconstruction network)
-        self.vector_j = tf.reshape(self.masked_v, shape=(tf.shape(x)[0], -1))  # Flatten the masked vector
-        fc1 = tf.keras.layers.Dense(units=512, activation='relu')(self.vector_j)
-        self.fc2 = tf.keras.layers.Dense(units=1024, activation='relu')(fc1)
-        self.decoded = tf.keras.layers.Dense(units=784, activation='sigmoid')(self.fc2)  # Assuming 28x28 image size for reconstruction
+        # Decoder forward pass (using tf.keras.layers.Dense)
+        vector_j = tf.reshape(self.masked_v, shape=(cfg.batch_size, -1))  # Flatten the masked vector
+        fc1 = tf.keras.layers.Dense(units=512, activation='relu')(vector_j)  # Use Dense from tf.keras
+        assert fc1.shape == [cfg.batch_size, 512], f"Expected shape [cfg.batch_size, 512], but got {fc1.shape}"
 
-        # Return both classification output and reconstruction output
-        r = self.reconstruction_network(x) if self.use_reconstruction else self.decoded
+        fc2 = tf.keras.layers.Dense(units=1024, activation='relu')(fc1)  # Use Dense from tf.keras
+        assert fc2.shape == [cfg.batch_size, 1024], f"Expected shape [cfg.batch_size, 1024], but got {fc2.shape}"
 
-        return class_output, r, layers
-
+        self.decoded = tf.keras.layers.Dense(units=784, activation='sigmoid')(fc2)  # Use Dense from tf.keras
+        assert self.decoded.shape == [cfg.batch_size, 784], f"Expected shape [cfg.batch_size, 784], but got {self.decoded.shape}"
+        
+        return class_output, self.decoded
         
     def train_loss(self, y_true, step):
         # 1. The margin loss
-        # [batch_size, 10, 1, 1]
+        # Ensure self.v_length has the expected shape: [batch_size, num_classes, 1, 1]
+        assert self.v_length.shape == [cfg.batch_size, 5, 1, 1], f"Expected v_length shape: {[cfg.batch_size, 5, 1, 1]}, but got {self.v_length.shape}"
+        
         max_l = tf.square(tf.maximum(0., cfg.m_plus - self.v_length))
         max_r = tf.square(tf.maximum(0., self.v_length - cfg.m_minus))
-
         
-        assert max_l.get_shape() == [cfg.batch_size, 5, 1, 1]
+        # Ensure the shapes of max_l and max_r are correct
+        assert max_l.shape == [cfg.batch_size, 5, 1, 1], f"Expected max_l shape: {[cfg.batch_size, 5, 1, 1]}, but got {max_l.shape}"
+        assert max_r.shape == [cfg.batch_size, 5, 1, 1], f"Expected max_r shape: {[cfg.batch_size, 5, 1, 1]}, but got {max_r.shape}"
 
-        # Reshape: [batch_size, 10, 1, 1] => [batch_size, 10]
+        # Reshape: [batch_size, 5, 1, 1] => [batch_size, 5]
         max_l = tf.reshape(max_l, shape=(cfg.batch_size, -1))
         max_r = tf.reshape(max_r, shape=(cfg.batch_size, -1))
 
-        # Calculate T_c: [batch_size, 10]
-        # One-hot encode the true labels (ensure y_true is categorical)
+        # 2. One-hot encode the true labels (ensure y_true is categorical)
+        # Ensure y_true is one-hot encoded with shape [batch_size, num_classes]
+        assert y_true.shape[1] == 5, f"Expected y_true shape to be [batch_size, 5], but got {y_true.shape}"
+
         T_c = tf.one_hot(tf.argmax(y_true, axis=1), depth=5)
+        assert T_c.shape == [cfg.batch_size, 5], f"Expected T_c shape: {[cfg.batch_size, 5]}, but got {T_c.shape}"
 
         # Calculate the margin loss
         L_c = T_c * max_l + cfg.lambda_val * (1 - T_c) * max_r
         self.margin_loss = tf.reduce_mean(tf.reduce_sum(L_c, axis=1))
 
-        # 2. The reconstruction loss
-        # Reshape input to compare
-        original = tf.reshape(self.X, shape=(cfg.batch_size, -1))  
+        # 3. The reconstruction loss
+        # Ensure the shape of self.X is correct and reshaped to [batch_size, -1]
+        assert self.X.shape == (cfg.batch_size, 28, 28, 1), f"Expected self.X shape: {(cfg.batch_size, 28, 28, 1)}, but got {self.X.shape}"
+        
+        original = tf.reshape(self.X, shape=(cfg.batch_size, -1))
+        assert original.shape == [cfg.batch_size, 784], f"Expected original shape: {[cfg.batch_size, 784]}, but got {original.shape}"
+
+        # Ensure self.decoded is of the correct shape
+        assert self.decoded.shape == [cfg.batch_size, 784], f"Expected decoded shape: {[cfg.batch_size, 784]}, but got {self.decoded.shape}"
+
         squared = tf.square(self.decoded - original)
         self.reconstruction_err = tf.reduce_mean(squared)
 
-        # 3. Total loss
+        # 4. Total loss
         self.total_loss = self.margin_loss + 0.0005 * self.reconstruction_err
 
+        # Assert that total_loss is a scalar
+        assert self.total_loss.shape == (), f"Expected total_loss to be a scalar, but got shape {self.total_loss.shape}"
+        
+        tf.summary.trace_on(graph=True)
         # Summary
         with self.summary_writer.as_default():
-            tf.summary.scalar('margin_loss', self.margin_loss, step=step)  # Replace with actual step
+            tf.summary.scalar('margin_loss', self.margin_loss, step=step)
             tf.summary.scalar('reconstruction_loss', self.reconstruction_err, step=step)
             tf.summary.scalar('total_loss', self.total_loss, step=step)
             recon_img = tf.reshape(self.decoded, shape=(cfg.batch_size, 28, 28, 1))
             tf.summary.image('reconstruction_img', recon_img, step=step)
 
+        # Now, export the trace (this will capture the graph)
+        tf.summary.trace_export(name="model_graph", step=step, profiler_outdir=cfg.logdir+'/'+cfg.model)
+
         return self.total_loss
+
     
 
 layers = tf.keras.layers

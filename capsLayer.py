@@ -79,8 +79,8 @@ def capsule(input, b_IJ, idx_j):
         vector output `v_j` of capsule j in the layer l+1
     '''
     with tf.name_scope('routing'):
-        w_initializer = np.random.normal(size=[1, 1152, 8, 16], scale=0.01)
-        W_Ij = tf.Variable(w_initializer, dtype=tf.float32)
+        initializer = tf.keras.initializers.GlorotUniform()
+        W_Ij = tf.Variable(initializer(shape=[1, 1152, 8, 16], dtype=tf.float32))
         W_Ij = tf.tile(W_Ij, [cfg.batch_size, 1, 1, 1])
 
         # Calculate u_hat
@@ -108,7 +108,6 @@ def capsule(input, b_IJ, idx_j):
 
         return v_j, b_IJ
 
-
 def squash(vector):
     '''Squashing function.
     Args:
@@ -119,5 +118,5 @@ def squash(vector):
     '''
     vec_abs = tf.sqrt(tf.reduce_sum(tf.square(vector), axis=-2, keepdims=True))  # a scalar
     scalar_factor = tf.square(vec_abs) / (1 + tf.square(vec_abs))
-    vec_squashed = scalar_factor * tf.divide(vector, vec_abs + tf.keras.backend.epsilon())  # element-wise
+    vec_squashed = scalar_factor * tf.divide(vector, vec_abs + 1e-8)  # element-wise
     return vec_squashed
